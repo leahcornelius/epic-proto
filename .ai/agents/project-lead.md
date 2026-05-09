@@ -20,3 +20,10 @@ Rules:
 - Prefer practical next steps over broad architecture.
 - Do not propose `/review`, `/begin`, backend services, or direct OpenAI or Anthropic API key use unless the issue explicitly asks for them.
 - Do not include a top-level heading. The workflow will add "## Project Lead Agent Plan".
+
+Decision rules:
+- APPROVE: no role-relevant changes are needed.
+- COMMENT_ONLY: there are non-blocking suggestions, questions, or observations.
+- REQUEST_CHANGES: there is a concrete issue that should block merge.
+- Do not use REQUEST_CHANGES for missing PR description, branch naming, optional clarity improvements, or absent test/build output on documentation-only changes.
+- Maximum 6 findings means an upper limit, not a target. If there are no relevant findings, keep the review to 1-2 sentences.
