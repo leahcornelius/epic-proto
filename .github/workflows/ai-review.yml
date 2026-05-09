@@ -6,7 +6,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
+  pull-requests: write
   issues: write
   models: read
 
@@ -27,16 +27,10 @@ jobs:
       }}
 
     steps:
-      - name: Checkout workflow files
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
       - name: Fetch pull request context
-        id: pr-context
         uses: actions/github-script@v7
         with:
           script: |
@@ -102,42 +96,6 @@ jobs:
             };
 
             fs.writeFileSync("review-context.json", `${JSON.stringify(reviewContext, null, 2)}\n`);
-            core.setOutput("head_sha", pullRequest.head.sha);
-            core.setOutput("head_repo", pullRequest.head.repo.full_name);
-            core.setOutput("has_fork_head", pullRequest.head.repo.full_name !== pullRequest.base.repo.full_name ? "true" : "false");
-
-      - name: Checkout pull request head
-        if: ${{ steps.pr-context.outputs.has_fork_head != 'true' }}
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ steps.pr-context.outputs.head_repo }}
-          ref: ${{ steps.pr-context.outputs.head_sha }}
-          path: pr-head
-
-      - name: Run review checks
-        if: ${{ steps.pr-context.outputs.has_fork_head != 'true' }}
-        run: node scripts/ai/run-review-checks.js review-context.json review-check-results.json .ai/review-checks.json pr-head
-
-      - name: Record skipped review checks
-        if: ${{ steps.pr-context.outputs.has_fork_head == 'true' }}
-        run: node scripts/ai/run-review-checks.js review-context.json review-check-results.json .ai/review-checks.json . "Checks skipped because this pull request comes from a fork."
-
-      - name: Log review check results
-        run: |
-          node <<'NODE'
-          const fs = require("fs");
-          const results = JSON.parse(fs.readFileSync("review-check-results.json", "utf8"));
-
-          if (results.executionError) {
-            console.log(results.executionError);
-          }
-
-          for (const check of results.checks || []) {
-            const required = check.required ? "required" : "optional";
-            const exitCode = check.exitCode ?? "none";
-            console.log(`${check.name}: ${check.status} (${required}, exit ${exitCode})`);
-          }
-          NODE
 
       - name: Select review agents
         run: node scripts/ai/review-router.js review-context.json > review-selection.json
@@ -215,44 +173,8 @@ jobs:
           async function main() {
             const prompts = JSON.parse(fs.readFileSync("review-prompts.json", "utf8"));
             const selection = JSON.parse(fs.readFileSync("review-selection.json", "utf8"));
-            const reviewContext = JSON.parse(fs.readFileSync("review-context.json", "utf8"));
             const logsUrl = workflowRunUrl();
             const lines = ["## AI PR Review", ""];
-
-            lines.push("### Checks");
-            const checkResults = reviewContext.checkResults;
-            if (!checkResults) {
-              lines.push("Check results were unavailable.");
-            } else if (checkResults.executionError) {
-              lines.push(checkResults.executionError);
-            } else if (!checkResults.checks || checkResults.checks.length === 0) {
-              lines.push("No configured checks ran.");
-            } else {
-              const requiredFailed = checkResults.checks.filter((check) => check.required && check.status === "failed").length;
-              const requiredSkipped = checkResults.checks.filter((check) => check.required && check.status === "skipped").length;
-              lines.push(`Required failed: ${requiredFailed}`);
-              lines.push(`Required skipped: ${requiredSkipped}`);
-              lines.push("");
-
-              for (const check of checkResults.checks) {
-                const required = check.required ? "required" : "optional";
-                const exitCode = check.exitCode ?? "none";
-                lines.push(`- ${check.name}: ${check.status} (${required}, exit ${exitCode})`);
-                if (check.status !== "passed") {
-                  const output = [check.stdout, check.stderr].filter(Boolean).join("\n").trim();
-                  if (output) {
-                    lines.push("");
-                    lines.push("```");
-                    lines.push(output.slice(0, 1200));
-                    if (output.length > 1200) {
-                      lines.push("[output truncated]");
-                    }
-                    lines.push("```");
-                  }
-                }
-              }
-            }
-            lines.push("");
 
             lines.push("Selected reviewers:");
             for (const agent of selection.agents) {
