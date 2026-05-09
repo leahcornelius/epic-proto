@@ -152,6 +152,12 @@ jobs:
         run: |
           node <<'NODE'
           const fs = require("fs");
+          const {
+            ReviewFailure,
+            createModelRequestFailure,
+            formatReviewFailure,
+            workflowRunUrl,
+          } = require("./scripts/ai/review-failure-format");
           const FINAL_PROMPT_BUDGET = 45000;
 
           function section(title, body) {
@@ -167,7 +173,12 @@ jobs:
 
             if (agent.exceededLocalContextBudget || promptLength > FINAL_PROMPT_BUDGET) {
               agent.exceededLocalContextBudget = true;
-              throw new Error(`Prompt exceeded local context budget (${promptLength} > ${FINAL_PROMPT_BUDGET} characters).`);
+              throw new ReviewFailure({
+                step: "Local prompt validation",
+                operation: "Review prompt context budget check",
+                code: "LOCAL_CONTEXT_BUDGET_EXCEEDED",
+                message: `Prompt exceeded local context budget (${promptLength} > ${FINAL_PROMPT_BUDGET} characters).`,
+              });
             }
 
             const response = await fetch("https://models.github.ai/inference/chat/completions", {
@@ -185,14 +196,17 @@ jobs:
             });
 
             if (!response.ok) {
-              const detail = await response.text();
-              throw new Error(`GitHub Models request failed with status ${response.status}: ${detail.slice(0, 300)}`);
+              throw await createModelRequestFailure(response);
             }
 
             const data = await response.json();
             const content = data.choices?.[0]?.message?.content?.trim();
             if (!content) {
-              throw new Error("GitHub Models returned an empty response.");
+              throw new ReviewFailure({
+                step: "Parse GitHub Models response",
+                operation: "Read assistant message content",
+                message: "GitHub Models returned an empty response.",
+              });
             }
 
             return content;
@@ -202,6 +216,7 @@ jobs:
             const prompts = JSON.parse(fs.readFileSync("review-prompts.json", "utf8"));
             const selection = JSON.parse(fs.readFileSync("review-selection.json", "utf8"));
             const reviewContext = JSON.parse(fs.readFileSync("review-context.json", "utf8"));
+            const logsUrl = workflowRunUrl();
             const lines = ["## AI PR Review", ""];
 
             lines.push("### Checks");
@@ -251,10 +266,7 @@ jobs:
                 lines.push(section(agent.label, content));
               } catch (error) {
                 console.error(`${agent.label} review failed: ${error.message}`);
-                const failureNote = agent.exceededLocalContextBudget
-                  ? "Review skipped for this agent because the prompt exceeded the local context budget after truncation. Check the workflow logs for the approximate prompt length."
-                  : "Review failed for this agent. Check the workflow logs for details.";
-                lines.push(section(agent.label, `${failureNote}\n\nDecision: COMMENT_ONLY`));
+                lines.push(section(agent.label, formatReviewFailure(error, { logsUrl })));
               }
             }
 
