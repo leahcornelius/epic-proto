@@ -2,7 +2,10 @@ const assert = require("assert");
 
 const {
   BUDGETS,
+  MAX_TOTAL_CHECK_OUTPUT,
   buildPromptForAgent,
+  buildReviewPrompts,
+  formatCheckResults,
   formatComments,
   formatFiles,
   relevantHumanComments,
@@ -113,6 +116,47 @@ function run() {
   assert(formattedFiles.endsWith("[truncated]"));
   assert(formattedFiles.length <= BUDGETS.diffContext);
 
+  const checkResults = {
+    checks: [
+      {
+        name: "Run tests",
+        command: "npm test",
+        workingDirectory: "workspace/toy-server",
+        required: true,
+        status: "failed",
+        exitCode: 1,
+        stdout: "x".repeat(20000),
+        stderr: "",
+        truncated: true,
+      },
+    ],
+    executionError: null,
+  };
+
+  const formattedChecks = formatCheckResults(checkResults);
+  assert.ok(formattedChecks.length <= MAX_TOTAL_CHECK_OUTPUT);
+  assert.ok(formattedChecks.includes("Required failed: 1"));
+  assert.ok(formattedChecks.includes("Required skipped: 0"));
+  assert.ok(formattedChecks.includes("[truncated]"));
+
+  const skippedFormatted = formatCheckResults({
+    checks: [{
+      name: "Skipped check",
+      command: "npm test",
+      workingDirectory: "workspace/toy-server",
+      required: true,
+      status: "skipped",
+      exitCode: null,
+      stdout: "",
+      stderr: "Checks skipped because this pull request comes from a fork.",
+      truncated: false,
+    }],
+    executionError: null,
+  });
+  assert.ok(skippedFormatted.includes("Required failed: 0"));
+  assert.ok(skippedFormatted.includes("Required skipped: 1"));
+  assert.ok(skippedFormatted.includes("Checks skipped because this pull request comes from a fork."));
+
   const longPlan = "## Project Lead Agent Plan\n" + "p".repeat(BUDGETS.projectLeadPlan + 1000);
   const prompt = buildPromptForAgent(baseAgent(), baseContext({
     comments: [
@@ -128,6 +172,37 @@ function run() {
   assert(!promptText.includes("bot-only context"));
   assert(promptText.includes("human context"));
   assert(promptText.includes("c".repeat(100)));
+
+  const structuredPrompts = buildReviewPrompts({
+    command: "/review qa",
+    repository: { full_name: "owner/repo" },
+    pullRequest: {
+      number: 1,
+      title: "Test PR",
+      body: "Body",
+      user: { login: "octo" },
+      base: { ref: "dev" },
+      head: { ref: "feature" },
+    },
+    files: [],
+    comments: [],
+    latestProjectLeadPlan: "",
+    checkResults,
+  }, {
+    selector: "qa",
+    agents: [{ id: "qa", label: "QA", reason: "Explicitly selected." }],
+  });
+  const structuredPromptBody = structuredPrompts.agents[0].messages[1].content;
+  assert.ok(structuredPromptBody.includes("Check results:"));
+  assert.ok(structuredPromptBody.includes("Run tests"));
+  assert.ok(structuredPromptBody.includes("Required failed: 1"));
+
+  const legacyPrompt = buildPromptForAgent(baseAgent(), baseContext({
+    checkOutput: "legacy check output",
+  }), baseSelection(baseAgent()));
+  const legacyPromptText = userPrompt(legacyPrompt);
+  assert(legacyPromptText.includes("Check results:"));
+  assert(legacyPromptText.includes("legacy check output"));
 
   const oversizedAgent = baseAgent({ reason: "r".repeat(BUDGETS.finalPrompt + 1000) });
   const oversizedPrompt = buildPromptForAgent(
