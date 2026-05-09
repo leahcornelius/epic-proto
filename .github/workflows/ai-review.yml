@@ -66,9 +66,42 @@ jobs:
               per_page: 100,
             });
 
-            const latestPlan = comments
-              .filter((comment) => comment.body && comment.body.includes("## Project Lead Agent Plan"))
-              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+            function latestPlanComment(planComments) {
+              return planComments
+                .filter((comment) => comment.body && comment.body.includes("## Project Lead Agent Plan"))
+                .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+            }
+
+            function linkedIssueNumber(body) {
+              const match = String(body || "").match(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/i);
+              return match ? Number(match[1]) : null;
+            }
+
+            const latestPrPlan = latestPlanComment(comments);
+            const linkedIssue = latestPrPlan ? null : linkedIssueNumber(pullRequest.body);
+            let latestLinkedIssuePlan = null;
+
+            if (linkedIssue) {
+              try {
+                const linkedIssueComments = await github.paginate(github.rest.issues.listComments, {
+                  owner,
+                  repo,
+                  issue_number: linkedIssue,
+                  per_page: 100,
+                });
+
+                latestLinkedIssuePlan = latestPlanComment(linkedIssueComments);
+              } catch (error) {
+                core.warning(`Could not read linked issue #${linkedIssue} plan comments: ${error.message}`);
+              }
+            }
+
+            const latestPlan = latestPrPlan || latestLinkedIssuePlan;
+            const latestPlanSource = latestPrPlan
+              ? "pull_request"
+              : latestLinkedIssuePlan
+                ? `linked_issue_${linkedIssue}`
+                : "";
 
             const reviewContext = {
               command: context.payload.comment.body,
@@ -99,6 +132,8 @@ jobs:
                 body: comment.body || "",
               })),
               latestProjectLeadPlan: latestPlan?.body || "",
+              latestProjectLeadPlanSource: latestPlanSource,
+              linkedIssueNumber: linkedIssue,
             };
 
             fs.writeFileSync("review-context.json", `${JSON.stringify(reviewContext, null, 2)}\n`);

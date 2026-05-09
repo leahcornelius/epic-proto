@@ -3,7 +3,7 @@ A prototype of a multi-agent semi-autonomous software team: EPIC
 
 ## `/plan` GitHub issue command
 
-Comment `/plan` at the start of a GitHub issue comment to ask the Project Lead Agent for a concise implementation plan. The workflow only runs on issues, ignores pull requests, and skips bot comments.
+Comment `/plan` at the start of a GitHub issue or pull request comment to ask the Project Lead Agent for a concise implementation plan. The workflow skips bot comments.
 
 The workflow uses GitHub Actions and GitHub Models through the built-in `GITHUB_TOKEN`. No OpenAI or Anthropic API keys are required. Repository context is read from committed files under `.ai/`.
 
@@ -11,8 +11,18 @@ Required workflow permissions and secrets:
 
 - `contents: read`
 - `issues: write`
+- `pull-requests: read`
 - `models: read`
 - No extra secrets are required beyond the built-in `GITHUB_TOKEN`.
+
+On issues, `/plan` keeps the issue-derived planning behavior. On pull requests, `/plan` fetches the PR title, body, changed files, patches, and relevant human comments, then posts a PR-derived plan with:
+
+- `Plan type: PR-derived`
+- Goal
+- Expected scope
+- Acceptance criteria
+- Required reviewers for Security, QA, DevOps, and API Contract
+- Open questions when the PR goal is unclear
 
 Current limitations:
 
@@ -37,6 +47,8 @@ Available selectors:
 - `/review all`
 
 Auto-routing always runs QA, then runs the Project Lead Coordinator after the selected specialist reviews finish. Security, DevOps, and API Contract run when explicitly selected, when changed file paths match `.ai/review-routing.json`, or when the latest Project Lead `/plan` comment requests that reviewer.
+
+For review routing and prompt context, `/review` uses the latest Project Lead plan from the PR when one exists. If no PR plan exists, it looks for a simple linked issue reference in the PR body using `Closes #123`, `Fixes #123`, or `Resolves #123`, then uses the latest plan comment from that issue. If neither exists, review proceeds from the PR title, body, diff, comments, and check results.
 
 `/review lead` runs only the Project Lead Coordinator with the available PR context. `/review all` runs QA, Security, DevOps, and API Contract first, then passes their outputs to the Project Lead Coordinator for a merge-readiness decision.
 
