@@ -9,6 +9,8 @@ const AGENT_FILES = {
   "api-contract": ".ai/agents/review-api-contract.md",
 };
 
+const MAX_TOTAL_CHECK_OUTPUT = 12000;
+
 function readText(relativePath) {
   return fs.readFileSync(path.join(process.cwd(), relativePath), "utf8").trim();
 }
@@ -23,7 +25,8 @@ function truncateText(value, maxLength) {
     return text;
   }
 
-  return `${text.slice(0, maxLength)}\n[truncated]`;
+  const marker = "\n[output truncated]";
+  return `${text.slice(0, Math.max(0, maxLength - marker.length))}${marker}`;
 }
 
 function formatFile(file) {
@@ -52,6 +55,46 @@ function formatComments(comments) {
       return [`### ${author} at ${createdAt}`, truncateText(comment.body || "", 1200)].join("\n");
     })
     .join("\n\n");
+}
+
+function formatCheck(check) {
+  const lines = [
+    `### ${check.name || "(unnamed check)"}`,
+    `Command: ${check.command || "(not configured)"}`,
+    `Working directory: ${check.workingDirectory || "."}`,
+    `Required: ${check.required ? "yes" : "no"}`,
+    `Status: ${check.status || "unknown"}`,
+    `Exit code: ${check.exitCode ?? "none"}`,
+    "",
+    "stdout:",
+    check.stdout || "(empty)",
+    "",
+    "stderr:",
+    check.stderr || "(empty)",
+  ];
+
+  if (check.truncated) {
+    lines.push("", "[output truncated]");
+  }
+
+  return lines.join("\n");
+}
+
+function formatCheckResults(checkResults) {
+  if (!checkResults) {
+    return "(Unavailable. Do not invent test or build results.)";
+  }
+
+  if (checkResults.executionError) {
+    return checkResults.executionError;
+  }
+
+  const checks = checkResults.checks || [];
+  if (checks.length === 0) {
+    return "(No configured checks ran.)";
+  }
+
+  return truncateText(checks.map(formatCheck).join("\n\n"), MAX_TOTAL_CHECK_OUTPUT);
 }
 
 function buildPromptForAgent(agent, context, selection) {
@@ -90,8 +133,8 @@ function buildPromptForAgent(agent, context, selection) {
     "Recent issue/PR comments:",
     formatComments(context.comments || []),
     "",
-    "Test/build output:",
-    context.checkOutput ? truncateText(context.checkOutput, 2500) : "(Unavailable. Do not invent test or build results.)",
+    "Check results:",
+    formatCheckResults(context.checkResults),
   ].join("\n");
 
   return {
@@ -144,7 +187,9 @@ if (require.main === module) {
 }
 
 module.exports = {
+  MAX_TOTAL_CHECK_OUTPUT,
   buildReviewPrompts,
   buildPromptForAgent,
+  formatCheckResults,
   truncateText,
 };

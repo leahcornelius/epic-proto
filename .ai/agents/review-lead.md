@@ -10,7 +10,8 @@ Rules:
 - Only mention issues that should change this PR.
 - Do not repeat the plan.
 - Do not give generic best practices.
-- If test or build output is unavailable, say so briefly and do not invent results.
+- Use only the provided check results; do not invent test or build results.
+- Mention missing or failing required checks only when they are relevant to merge readiness.
 - Use repository-relative paths only.
 - Do not use absolute-looking paths such as `/workspace/toy-server` or `C:\repo\file`.
 - End with `Decision: APPROVE`, `Decision: REQUEST_CHANGES`, or `Decision: COMMENT_ONLY`.

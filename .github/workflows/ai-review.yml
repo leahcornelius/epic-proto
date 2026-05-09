@@ -27,10 +27,11 @@ jobs:
       }}
 
     steps:
-      - name: Checkout
+      - name: Checkout workflow files
         uses: actions/checkout@v4
 
       - name: Fetch pull request context
+        id: pr-context
         uses: actions/github-script@v7
         with:
           script: |
@@ -96,6 +97,18 @@ jobs:
             };
 
             fs.writeFileSync("review-context.json", `${JSON.stringify(reviewContext, null, 2)}\n`);
+            core.setOutput("head_sha", pullRequest.head.sha);
+            core.setOutput("head_repo", pullRequest.head.repo.full_name);
+
+      - name: Checkout pull request head
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.pr-context.outputs.head_repo }}
+          ref: ${{ steps.pr-context.outputs.head_sha }}
+          path: pr-head
+
+      - name: Run review checks
+        run: node scripts/ai/run-review-checks.js review-context.json review-check-results.json .ai/review-checks.json pr-head
 
       - name: Select review agents
         run: node scripts/ai/review-router.js review-context.json > review-selection.json
@@ -147,7 +160,37 @@ jobs:
           async function main() {
             const prompts = JSON.parse(fs.readFileSync("review-prompts.json", "utf8"));
             const selection = JSON.parse(fs.readFileSync("review-selection.json", "utf8"));
+            const reviewContext = JSON.parse(fs.readFileSync("review-context.json", "utf8"));
             const lines = ["## AI PR Review", ""];
+
+            lines.push("### Checks");
+            const checkResults = reviewContext.checkResults;
+            if (!checkResults) {
+              lines.push("Check results were unavailable.");
+            } else if (checkResults.executionError) {
+              lines.push(checkResults.executionError);
+            } else if (!checkResults.checks || checkResults.checks.length === 0) {
+              lines.push("No configured checks ran.");
+            } else {
+              for (const check of checkResults.checks) {
+                const required = check.required ? "required" : "optional";
+                const exitCode = check.exitCode ?? "none";
+                lines.push(`- ${check.name}: ${check.status} (${required}, exit ${exitCode})`);
+                if (check.status !== "passed") {
+                  const output = [check.stdout, check.stderr].filter(Boolean).join("\n").trim();
+                  if (output) {
+                    lines.push("");
+                    lines.push("```");
+                    lines.push(output.slice(0, 1200));
+                    if (output.length > 1200) {
+                      lines.push("[output truncated]");
+                    }
+                    lines.push("```");
+                  }
+                }
+              }
+            }
+            lines.push("");
 
             lines.push("Selected reviewers:");
             for (const agent of selection.agents) {

@@ -39,3 +39,5 @@ Available selectors:
 Auto-routing always runs Project Lead and QA. Security, DevOps, and API Contract run when changed file paths match `.ai/review-routing.json` or when the latest Project Lead `/plan` comment requests that reviewer.
 
 The review workflow posts one combined PR comment with selected reviewers, routing reasons, and each agent's review. Individual agent failures are reported in the combined comment when possible.
+
+Before calling the review agents, `/review` checks out the pull request head and runs the configured commands from `.ai/review-checks.json`. The combined review comment includes a concise `Checks` section, and the check output is capped before it is sent to the agents.
