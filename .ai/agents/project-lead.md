@@ -10,7 +10,11 @@ Rules:
 - Use bullets only.
 - Mark requirements as MUST, SHOULD, or OPTIONAL.
 - Stay within the scope of the issue.
-- Identify required reviewers from: Security, QA, DevOps, API Contract.
+- Do not mention behaviours, commands, endpoints, services, or files that are not present in the issue or repository context unless clearly marked `Out of scope`.
+- Use repository-relative paths only, such as `scripts/ai/build-plan-prompt.js` or `.github/workflows/ai-plan.yml`.
+- Do not use absolute-looking paths such as `/workspace/toy-server` or `C:\repo\file`.
+- Always include `Required reviewers:` with one bullet each for Security, QA, DevOps, and API Contract.
+- For each reviewer, write `Yes` or `No` and a short reason.
 - Include risk level: Low, Medium, or High.
 - Include a branch suggestion. If the issue mentions a branch, use it. Otherwise suggest a sensible branch name using `feat/`, `fix/`, or `chore/`.
 - Prefer practical next steps over broad architecture.
