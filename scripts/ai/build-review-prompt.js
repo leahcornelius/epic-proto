@@ -66,6 +66,9 @@ function buildPromptForAgent(agent, context, selection) {
   const pr = context.pullRequest || {};
   const repository = context.repository || {};
   const files = context.files || [];
+  const selectedReviewers = (selection.agents || [])
+    .map((selectedAgent) => `${selectedAgent.label}: ${selectedAgent.reason || "No reason provided."}`)
+    .join("\n");
 
   const userPrompt = [
     `Review this pull request as ${agent.label}.`,
@@ -77,6 +80,9 @@ function buildPromptForAgent(agent, context, selection) {
     `Base branch: ${pr.base?.ref || pr.baseRef || "unknown"}`,
     `Head branch: ${pr.head?.ref || pr.headRef || "unknown"}`,
     `Selected because: ${agent.reason || "No reason provided."}`,
+    "",
+    "Selected reviewers:",
+    selectedReviewers || "(No selected reviewers provided.)",
     "",
     "Pull request body:",
     truncateText(pr.body || "(No pull request body provided.)", 3000),
