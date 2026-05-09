@@ -8,6 +8,8 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
+  checks: read
+  statuses: read
   models: read
 
 jobs:
@@ -60,9 +62,36 @@ jobs:
               per_page: 100,
             });
 
+            const checkRuns = await github.paginate(github.rest.checks.listForRef, {
+              owner,
+              repo,
+              ref: pullRequest.head.sha,
+              per_page: 100,
+            });
+
+            const { data: combinedStatus } = await github.rest.repos.getCombinedStatusForRef({
+              owner,
+              repo,
+              ref: pullRequest.head.sha,
+            });
+
             const latestPlan = comments
               .filter((comment) => comment.body && comment.body.includes("## Project Lead Agent Plan"))
               .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+
+            const checkOutput = [
+              "Check runs:",
+              ...checkRuns.map((check) => [
+                `- ${check.name}: ${check.status}${check.conclusion ? ` / ${check.conclusion}` : ""}`,
+                check.output?.title ? `  title: ${check.output.title}` : "",
+                check.output?.summary ? `  summary: ${check.output.summary.slice(0, 1000)}` : "",
+              ].filter(Boolean).join("\n")),
+              "",
+              "Commit statuses:",
+              ...combinedStatus.statuses.map((status) => (
+                `- ${status.context}: ${status.state}${status.description ? ` (${status.description})` : ""}`
+              )),
+            ].join("\n");
 
             const reviewContext = {
               command: context.payload.comment.body,
@@ -93,6 +122,7 @@ jobs:
                 body: comment.body || "",
               })),
               latestProjectLeadPlan: latestPlan?.body || "",
+              checkOutput,
             };
 
             fs.writeFileSync("review-context.json", `${JSON.stringify(reviewContext, null, 2)}\n`);
@@ -110,6 +140,9 @@ jobs:
         run: |
           node <<'NODE'
           const fs = require("fs");
+          const {
+            buildPromptForCoordinator,
+          } = require("./scripts/ai/build-review-prompt");
           const {
             ReviewFailure,
             createModelRequestFailure,
@@ -173,25 +206,55 @@ jobs:
           async function main() {
             const prompts = JSON.parse(fs.readFileSync("review-prompts.json", "utf8"));
             const selection = JSON.parse(fs.readFileSync("review-selection.json", "utf8"));
+            const reviewContext = JSON.parse(fs.readFileSync("review-context.json", "utf8"));
             const logsUrl = workflowRunUrl();
             const lines = ["## AI PR Review", ""];
+            const specialistSections = [];
+            const specialistReviews = [];
 
-            lines.push("Selected reviewers:");
+            lines.push("Selected specialist reviewers:");
             for (const agent of selection.agents) {
               lines.push(`- ${agent.label}: ${agent.reason}`);
+            }
+            if (selection.agents.length === 0) {
+              lines.push("- None.");
+            }
+            if (selection.coordinator) {
+              lines.push("");
+              lines.push(`Coordinator: ${selection.coordinator.label}: ${selection.coordinator.reason}`);
             }
             lines.push("");
 
             for (const agent of prompts.agents) {
               try {
                 const content = await callModel(agent);
-                lines.push(section(agent.label, content));
+                specialistReviews.push({ id: agent.id, label: agent.label, content });
+                specialistSections.push(section(agent.label, content));
               } catch (error) {
                 console.error(`${agent.label} review failed: ${error.message}`);
-                lines.push(section(agent.label, formatReviewFailure(error, { logsUrl })));
+                const content = formatReviewFailure(error, { logsUrl });
+                specialistReviews.push({ id: agent.id, label: agent.label, content, error: true });
+                specialistSections.push(section(agent.label, content));
               }
             }
 
+            if (selection.coordinator) {
+              const coordinatorPrompt = buildPromptForCoordinator(
+                selection.coordinator,
+                { ...reviewContext, specialistReviews },
+                selection
+              );
+
+              try {
+                const content = await callModel(coordinatorPrompt);
+                lines.push(section(selection.coordinator.label, content));
+              } catch (error) {
+                console.error(`${selection.coordinator.label} review failed: ${error.message}`);
+                lines.push(section(selection.coordinator.label, formatReviewFailure(error, { logsUrl })));
+              }
+            }
+
+            lines.push(...specialistSections);
             fs.writeFileSync("review-comment.md", `${lines.join("\n")}\n`);
           }
 

@@ -26,9 +26,11 @@ const AI_PR_REVIEW_HEADING = "## AI PR Review";
 const AI_REVIEW_HEADINGS = [
   AI_PR_REVIEW_HEADING,
   "Project Lead PR Review",
+  "Project Lead Coordinator",
   "Security Agent PR Review",
   "QA PR Review",
   "### Project Lead",
+  "### Project Lead Coordinator",
   "### QA",
   "### Security",
   "### DevOps",
@@ -162,7 +164,33 @@ function estimatePromptLength(messages) {
   return messages.reduce((total, message) => total + String(message.content || "").length, 0);
 }
 
-function buildPromptForAgent(agent, context, selection) {
+function selectedReviewersText(selection) {
+  const selectedSpecialists = (selection.agents || [])
+    .map((selectedAgent) => `${selectedAgent.label}: ${selectedAgent.reason || "No reason provided."}`);
+  const coordinator = selection.coordinator
+    ? [`${selection.coordinator.label}: ${selection.coordinator.reason || "No reason provided."}`]
+    : [];
+
+  return [...selectedSpecialists, ...coordinator].join("\n");
+}
+
+function formatSpecialistReviews(reviews) {
+  if (!reviews || reviews.length === 0) {
+    return "(No specialist review outputs were provided.)";
+  }
+
+  return truncateText(
+    reviews.map((review) => {
+      const body = review.error
+        ? `Review failed:\n${review.content || review.error}`
+        : review.content || "(No review content provided.)";
+      return [`### ${review.label || review.id || "Unknown specialist"}`, body].join("\n");
+    }).join("\n\n"),
+    BUDGETS.checkOutput
+  );
+}
+
+function basePromptContext(agent, context, selection) {
   const agentFile = AGENT_FILES[agent.id];
   if (!agentFile) {
     throw new Error(`No prompt file configured for review agent: ${agent.id}`);
@@ -175,9 +203,31 @@ function buildPromptForAgent(agent, context, selection) {
   const repository = context.repository || {};
   const files = context.files || [];
   const planComment = latestProjectLeadPlan(context);
-  const selectedReviewers = (selection.agents || [])
-    .map((selectedAgent) => `${selectedAgent.label}: ${selectedAgent.reason || "No reason provided."}`)
-    .join("\n");
+  const selectedReviewers = selectedReviewersText(selection);
+
+  return {
+    agentPrompt,
+    projectSummary,
+    codingStandards,
+    pr,
+    repository,
+    files,
+    planComment,
+    selectedReviewers,
+  };
+}
+
+function buildPromptForAgent(agent, context, selection) {
+  const {
+    agentPrompt,
+    projectSummary,
+    codingStandards,
+    pr,
+    repository,
+    files,
+    planComment,
+    selectedReviewers,
+  } = basePromptContext(agent, context, selection);
 
   const userPrompt = [
     `Review this pull request as ${agent.label}.`,
@@ -242,10 +292,91 @@ function buildPromptForAgent(agent, context, selection) {
   };
 }
 
+function buildPromptForCoordinator(coordinator, context, selection) {
+  const {
+    agentPrompt,
+    projectSummary,
+    codingStandards,
+    pr,
+    repository,
+    files,
+    planComment,
+    selectedReviewers,
+  } = basePromptContext(coordinator, context, selection);
+
+  const userPrompt = [
+    `Coordinate this pull request review as ${coordinator.label}.`,
+    "",
+    `Repository: ${repository.full_name || context.repositoryFullName || process.env.GITHUB_REPOSITORY || "unknown"}`,
+    `Pull request: #${pr.number || context.issueNumber || "unknown"}`,
+    `Title: ${pr.title || ""}`,
+    `Author: ${pr.user?.login || pr.author || "unknown"}`,
+    `Base branch: ${pr.base?.ref || pr.baseRef || "unknown"}`,
+    `Head branch: ${pr.head?.ref || pr.headRef || "unknown"}`,
+    `Selected because: ${coordinator.reason || "No reason provided."}`,
+    "",
+    "Selected reviewers and coordinator:",
+    selectedReviewers || "(No selected reviewers provided.)",
+    "",
+    "Pull request body:",
+    truncateText(pr.body || "(No pull request body provided.)", BUDGETS.prBody),
+    "",
+    "Latest Project Lead plan comment:",
+    truncateText(planComment || "(No Project Lead plan comment found.)", BUDGETS.projectLeadPlan),
+    "",
+    "Specialist review outputs:",
+    formatSpecialistReviews(context.specialistReviews || []),
+    "",
+    "Changed files and patches:",
+    formatFiles(files),
+    "",
+    "Recent issue/PR comments:",
+    formatComments(context.comments || []),
+    "",
+    "Test/build output:",
+    context.checkOutput
+      ? truncateText(context.checkOutput, BUDGETS.checkOutput)
+      : "(Unavailable. Do not invent test or build results.)",
+  ].join("\n");
+
+  const messages = [
+    {
+      role: "system",
+      content: [
+        agentPrompt,
+        "",
+        "Repository context:",
+        projectSummary,
+        "",
+        "Coding standards:",
+        codingStandards,
+      ].join("\n"),
+    },
+    {
+      role: "user",
+      content: userPrompt,
+    },
+  ];
+  const estimatedPromptLength = estimatePromptLength(messages);
+
+  return {
+    id: coordinator.id,
+    label: coordinator.label,
+    reason: coordinator.reason,
+    messages,
+    estimatedPromptLength,
+    exceededLocalContextBudget: estimatedPromptLength > BUDGETS.finalPrompt,
+    selection,
+  };
+}
+
 function buildReviewPrompts(context, selection) {
   return {
     selector: selection.selector,
     agents: selection.agents.map((agent) => buildPromptForAgent(agent, context, selection)),
+    coordinator: selection.coordinator
+      ? buildPromptForCoordinator(selection.coordinator, context, selection)
+      : null,
   };
 }
 
@@ -270,7 +401,9 @@ module.exports = {
   BUDGETS,
   buildReviewPrompts,
   buildPromptForAgent,
+  buildPromptForCoordinator,
   containsAiReviewHeading,
+  formatSpecialistReviews,
   formatComments,
   formatFiles,
   relevantHumanComments,
