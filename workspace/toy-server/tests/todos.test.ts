@@ -99,6 +99,19 @@ describe("toy TODO API", () => {
     expect(todos.body).toEqual([]);
   });
 
+
+  test("POST /todos accepts lowercase bearer scheme", async () => {
+    const { apiKey } = createApiKey();
+
+    const response = await request(app)
+      .post("/todos")
+      .set("Authorization", `bearer ${apiKey}`)
+      .send({ new: ["lowercase scheme"] });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual(["lowercase scheme"]);
+  });
+
   test("multiple active API keys work and revoking one does not revoke another", async () => {
     const first = createApiKey();
     const second = createApiKey();

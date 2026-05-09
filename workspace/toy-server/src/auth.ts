@@ -171,7 +171,7 @@ function getBearerToken(req: Request) {
     return null;
   }
 
-  const match = authorization.match(/^Bearer ([^\s]+)$/);
+  const match = authorization.match(/^Bearer ([^\s]+)$/i);
   return match ? match[1] : null;
 }
 

@@ -38,6 +38,11 @@ npm run api-key:revoke -- <api-key>
 
 Revoked keys remain recorded and cannot be used again.
 
+
+This toy prototype does not support running `api-key:generate`/`api-key:revoke` concurrently; simultaneous commands can race and produce unexpected key-store results.
+
+Passing a key to `api-key:revoke` as a CLI argument can expose it in shell history and process listings. That tradeoff is accepted for this toy prototype only.
+
 Authenticate `POST /todos` with the `Authorization` header:
 
 ```http
