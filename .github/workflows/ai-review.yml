@@ -104,7 +104,7 @@ jobs:
             fs.writeFileSync("review-context.json", `${JSON.stringify(reviewContext, null, 2)}\n`);
             core.setOutput("head_sha", pullRequest.head.sha);
             core.setOutput("head_repo", pullRequest.head.repo.full_name);
-            core.setOutput("has_fork_head", pullRequest.head.repo.fork ? "true" : "false");
+            core.setOutput("has_fork_head", pullRequest.head.repo.full_name !== pullRequest.base.repo.full_name ? "true" : "false");
 
       - name: Checkout pull request head
         if: ${{ steps.pr-context.outputs.has_fork_head != 'true' }}
