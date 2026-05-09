@@ -196,6 +196,12 @@ jobs:
             } else if (!checkResults.checks || checkResults.checks.length === 0) {
               lines.push("No configured checks ran.");
             } else {
+              const requiredFailed = checkResults.checks.filter((check) => check.required && check.status === "failed").length;
+              const requiredSkipped = checkResults.checks.filter((check) => check.required && check.status === "skipped").length;
+              lines.push(`Required failed: ${requiredFailed}`);
+              lines.push(`Required skipped: ${requiredSkipped}`);
+              lines.push("");
+
               for (const check of checkResults.checks) {
                 const required = check.required ? "required" : "optional";
                 const exitCode = check.exitCode ?? "none";

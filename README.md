@@ -40,14 +40,37 @@ Auto-routing always runs Project Lead and QA. Security, DevOps, and API Contract
 
 The review workflow posts one combined PR comment with selected reviewers, routing reasons, and each agent's review. Individual agent failures are reported in the combined comment when possible.
 
-Before calling the review agents, `/review` checks out the pull request head and runs the configured commands from `.ai/review-checks.json`. The combined review comment includes a concise `Checks` section, and the check output is capped before it is sent to the agents.
+Before calling the review agents, `/review` checks out the pull request head and runs the configured commands from `.ai/review-checks.json`. Each check entry must include:
+
+- `name`: human-readable check name.
+- `command`: command and arguments to run, without shell operators.
+- `workingDirectory`: repository-relative directory for the command.
+- `required`: boolean used to highlight failed or skipped required checks.
+
+Example check config:
+
+```json
+[
+  {
+    "name": "Run toy-server tests",
+    "command": "npm test",
+    "workingDirectory": "workspace/toy-server",
+    "required": true
+  }
+]
+```
+
+The combined review comment includes a concise `Checks` section, and the check output is capped before it is sent to the agents.
 
 Example `Checks` section:
 
 ```text
 ### Checks
+Required failed: 1
+Required skipped: 0
+
 - Install toy-server dependencies: passed (required, exit 0)
 - Run toy-server tests: failed (required, exit 1)
 ```
 
-For pull requests from forks, configured checks are marked as skipped for security; the agents still run using PR metadata, changed files, and patches.
+For pull requests from forks, configured checks are marked as `skipped` for security; the agents still run using PR metadata, changed files, and patches. Check output is capped at 6000 characters per check and 12000 total characters per model prompt. `[output truncated]` means captured stdout or stderr was shortened before it was shown or sent to the agents.

@@ -47,6 +47,23 @@ function capStreams(stdout, stderr) {
   };
 }
 
+function logCheckResult(result) {
+  const required = result.required ? "required" : "optional";
+  const exitCode = result.exitCode ?? "none";
+  const line = `${result.name}: ${result.status} (${required}, exit ${exitCode})`;
+
+  if (result.status === "passed") {
+    console.log(line);
+    return;
+  }
+
+  console.error(line);
+  const detail = result.error || result.stderr || result.stdout;
+  if (detail) {
+    console.error(truncate(detail, 1200).text);
+  }
+}
+
 function parseCommand(command) {
   if (typeof command !== "string" || command.trim() === "") {
     throw new Error("Check command must be a non-empty string.");
@@ -54,6 +71,11 @@ function parseCommand(command) {
 
   if (UNSAFE_COMMAND_CHARS.test(command)) {
     throw new Error("Check command contains shell control characters that are not supported.");
+  }
+
+  const quoteMatches = command.match(/["']/g) || [];
+  if (quoteMatches.length % 2 !== 0) {
+    throw new Error("Check command contains unmatched quotes.");
   }
 
   const parts = command.trim().match(/"([^"]*)"|'([^']*)'|\S+/g) || [];
@@ -65,24 +87,65 @@ function parseCommand(command) {
 }
 
 function normalizeCheck(rawCheck, index) {
-  const check = rawCheck || {};
+  const fallbackName = `Check ${index + 1}`;
+  if (!rawCheck || typeof rawCheck !== "object" || Array.isArray(rawCheck)) {
+    return {
+      valid: false,
+      check: {
+        name: fallbackName,
+        command: "",
+        workingDirectory: ".",
+        required: false,
+      },
+      reason: "Check skipped because config entry must be an object.",
+    };
+  }
+
+  const errors = [];
+  const check = rawCheck;
   const name = typeof check.name === "string" && check.name.trim()
     ? check.name.trim()
-    : `Check ${index + 1}`;
+    : fallbackName;
   const workingDirectory = typeof check.workingDirectory === "string" && check.workingDirectory.trim()
     ? check.workingDirectory.trim()
     : ".";
+  const command = typeof check.command === "string" ? check.command.trim() : "";
+  const required = check.required === true;
 
-  if (path.isAbsolute(workingDirectory) || workingDirectory.split(/[\\/]+/).includes("..")) {
+  if (typeof check.name !== "string" || !check.name.trim()) {
+    errors.push("name must be a non-empty string");
+  }
+
+  if (!command) {
+    errors.push("command must be a non-empty string");
+  } else {
+    try {
+      parseCommand(command);
+    } catch (error) {
+      errors.push(error.message);
+    }
+  }
+
+  if (typeof check.workingDirectory !== "string" || !check.workingDirectory.trim()) {
+    errors.push("workingDirectory must be a non-empty relative path");
+  } else if (path.isAbsolute(workingDirectory) || workingDirectory.split(/[\\/]+/).includes("..")) {
+    errors.push("workingDirectory must be a relative path inside the checkout");
+  }
+
+  if (typeof check.required !== "boolean") {
+    errors.push("required must be a boolean");
+  }
+
+  if (errors.length > 0) {
     return {
       valid: false,
       check: {
         name,
-        command: typeof check.command === "string" ? check.command : "",
+        command,
         workingDirectory,
-        required: Boolean(check.required),
+        required,
       },
-      reason: "Check skipped because workingDirectory must be a relative path inside the checkout.",
+      reason: `Check skipped because config is invalid: ${errors.join("; ")}.`,
     };
   }
 
@@ -90,9 +153,9 @@ function normalizeCheck(rawCheck, index) {
     valid: true,
     check: {
       name,
-      command: typeof check.command === "string" ? check.command.trim() : "",
+      command,
       workingDirectory,
-      required: Boolean(check.required),
+      required,
     },
   };
 }
@@ -129,6 +192,8 @@ function runCommand(check) {
         windowsHide: true,
       });
     } catch (error) {
+      console.error(`${check.name}: failed to start check command.`);
+      console.error(error.message);
       const capped = capStreams("", error.message);
       finish({
         name: check.name,
@@ -154,6 +219,11 @@ function runCommand(check) {
     });
 
     child.on("error", (error) => {
+      if (settled) {
+        return;
+      }
+      console.error(`${check.name}: check command error.`);
+      console.error(error.message);
       const capped = capStreams(stdout, `${stderr}\n${error.message}`);
       finish({
         name: check.name,
@@ -170,7 +240,13 @@ function runCommand(check) {
     });
 
     child.on("close", (code) => {
+      if (settled) {
+        return;
+      }
       const capped = capStreams(stdout, stderr);
+      if (code !== 0) {
+        console.error(`${check.name}: check command exited with ${code}.`);
+      }
       finish({
         name: check.name,
         command: check.command,
@@ -206,16 +282,22 @@ async function runChecks(config) {
   for (const item of config) {
     const { check, valid, reason } = item.valid === undefined ? normalizeCheck(item, results.length) : item;
     if (!valid) {
-      results.push(skippedResult(check, reason));
+      const result = skippedResult(check, reason);
+      logCheckResult(result);
+      results.push(result);
       continue;
     }
 
     if (!check.command) {
-      results.push(skippedResult(check, "Check skipped because no command was configured."));
+      const result = skippedResult(check, "Check skipped because no command was configured.");
+      logCheckResult(result);
+      results.push(result);
       continue;
     }
 
-    results.push(await runCommand(check));
+    const result = await runCommand(check);
+    logCheckResult(result);
+    results.push(result);
   }
 
   return results;
@@ -231,7 +313,11 @@ async function main() {
   try {
     const config = loadConfig(configPath);
     const checks = skipReason
-      ? config.map((item) => skippedResult(item.check, skipReason))
+      ? config.map((item) => {
+          const result = skippedResult(item.check, skipReason);
+          logCheckResult(result);
+          return result;
+        })
       : await runChecks(config);
     const payload = { checks, executionError: null };
     const context = tryReadJson(contextPath);
@@ -241,6 +327,7 @@ async function main() {
     writeJson(outputPath, payload);
     writeJson(contextPath, context);
   } catch (error) {
+    console.error(`Review check execution failed unexpectedly: ${error.message}`);
     const payload = {
       checks: [],
       executionError: `Review check execution failed unexpectedly: ${error.message}`,
@@ -262,6 +349,7 @@ module.exports = {
   MAX_CHECK_OUTPUT,
   capStreams,
   loadConfig,
+  logCheckResult,
   normalizeCheck,
   parseCommand,
   runChecks,

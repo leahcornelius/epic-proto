@@ -25,7 +25,25 @@ const checkResults = {
 const formatted = formatCheckResults(checkResults);
 assert.ok(formatted.length <= MAX_TOTAL_CHECK_OUTPUT);
 assert.ok(formatted.includes("Required failed: 1"));
+assert.ok(formatted.includes("Required skipped: 0"));
 assert.ok(formatted.includes("[output truncated]"));
+
+const skippedFormatted = formatCheckResults({
+  checks: [{
+    name: "Skipped check",
+    command: "npm test",
+    workingDirectory: "workspace/toy-server",
+    required: true,
+    status: "skipped",
+    exitCode: null,
+    stdout: "",
+    stderr: "Checks skipped because this pull request comes from a fork.",
+    truncated: false,
+  }],
+  executionError: null,
+});
+assert.ok(skippedFormatted.includes("Required failed: 0"));
+assert.ok(skippedFormatted.includes("Required skipped: 1"));
 
 const prompts = buildReviewPrompts({
   command: "/review qa",
