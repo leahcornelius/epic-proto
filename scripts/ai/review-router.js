@@ -63,12 +63,17 @@ function matchesAnyPattern(filePath, patterns) {
 
 function parseReviewCommand(body) {
   const firstLine = String(body || "").trim().split(/\r?\n/, 1)[0].trim().toLowerCase();
-  const match = firstLine.match(/^\/review(?:\s+([a-z-]+))?\s*$/);
-  if (!match) {
+  const tokens = firstLine.split(/\s+/);
+  if (tokens[0] !== "/review") {
     return { valid: false, selector: null };
   }
 
-  return { valid: true, selector: match[1] || "auto" };
+  const candidate = tokens[1];
+  const selector = candidate && (candidate === "all" || candidate === "auto" || EXPLICIT_SELECTORS.has(candidate))
+    ? candidate
+    : "auto";
+
+  return { valid: true, selector };
 }
 
 function latestPlanRequests(planBody) {
@@ -78,7 +83,7 @@ function latestPlanRequests(planBody) {
     .map((line) => line.replace(/^[\s*-]+/, "").trim());
 
   function lineRequests(labelPattern) {
-    return lines.some((line) => labelPattern.test(line) && /:\s*yes\b/.test(line));
+    return lines.some((line) => labelPattern.test(line) && /\s*[-—]\s*yes\b/.test(line));
   }
 
   return {
