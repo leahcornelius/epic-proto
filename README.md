@@ -1,5 +1,5 @@
-# epic-proto
-A prototype of a multi-agent semi-autonomous software team
+# EPIC AI prototype
+A prototype of a multi-agent semi-autonomous software team: EPIC
 
 ## `/plan` GitHub issue command
 
