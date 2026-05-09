@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
   issues: write
   models: read
 
@@ -16,7 +17,6 @@ jobs:
     if: >-
       ${{
         startsWith(github.event.comment.body, '/plan') &&
-        !github.event.issue.pull_request &&
         github.event.comment.user.type != 'Bot' &&
         (
           github.event.comment.author_association == 'OWNER' ||
@@ -29,8 +29,72 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Fetch pull request context
+        if: ${{ github.event.issue.pull_request }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pull_number = context.issue.number;
+
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number,
+            });
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner,
+              repo,
+              pull_number,
+              per_page: 100,
+            });
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: pull_number,
+              per_page: 100,
+            });
+
+            const planContext = {
+              isPullRequest: true,
+              command: context.payload.comment.body,
+              repository: context.payload.repository,
+              issueNumber: pull_number,
+              pullRequest: {
+                number: pullRequest.number,
+                title: pullRequest.title,
+                body: pullRequest.body || "",
+                user: pullRequest.user,
+                base: pullRequest.base,
+                head: pullRequest.head,
+                state: pullRequest.state,
+                draft: pullRequest.draft,
+                html_url: pullRequest.html_url,
+              },
+              files: files.map((file) => ({
+                filename: file.filename,
+                status: file.status,
+                additions: file.additions,
+                deletions: file.deletions,
+                changes: file.changes,
+                patch: file.patch || "",
+              })),
+              comments: comments.map((comment) => ({
+                user: comment.user,
+                created_at: comment.created_at,
+                body: comment.body || "",
+              })),
+            };
+
+            fs.writeFileSync("plan-context.json", `${JSON.stringify(planContext, null, 2)}\n`);
+
       - name: Build prompt
-        run: node scripts/ai/build-plan-prompt.js > plan-prompt.json
+        run: node scripts/ai/build-plan-prompt.js plan-context.json > plan-prompt.json
 
       - name: Call GitHub Models
         id: model
