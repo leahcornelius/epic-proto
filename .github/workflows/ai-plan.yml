@@ -17,7 +17,12 @@ jobs:
       ${{
         startsWith(github.event.comment.body, '/plan') &&
         !github.event.issue.pull_request &&
-        github.event.comment.user.type != 'Bot'
+        github.event.comment.user.type != 'Bot' &&
+        (
+          github.event.comment.author_association == 'OWNER' ||
+          github.event.comment.author_association == 'COLLABORATOR' ||
+          github.event.comment.author_association == 'MEMBER'
+        )
       }}
 
     steps:

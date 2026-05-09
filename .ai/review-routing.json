@@ -1,0 +1,29 @@
+{
+  "security": [
+    "**/auth.ts",
+    "**/auth/**",
+    "**/security/**",
+    "**/middleware/**",
+    "**/apiKeys.ts",
+    "**/.env*",
+    "**/package.json",
+    "**/package-lock.json"
+  ],
+  "devops": [
+    ".github/**",
+    "**/Dockerfile",
+    "**/docker-compose.yml",
+    "infra/**",
+    "**/deploy/**",
+    "**/config/**"
+  ],
+  "api-contract": [
+    "**/routes/**",
+    "**/controllers/**",
+    "**/openapi.yaml",
+    "**/openapi.yml",
+    "**/swagger.yaml",
+    "**/readme.md",
+    "**/README.md"
+  ]
+}

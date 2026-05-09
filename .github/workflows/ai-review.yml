@@ -1,0 +1,190 @@
+name: AI Review
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+  models: read
+
+jobs:
+  review:
+    name: Generate AI PR review
+    runs-on: ubuntu-latest
+    if: >-
+      ${{
+        startsWith(github.event.comment.body, '/review') &&
+        github.event.issue.pull_request &&
+        github.event.comment.user.type != 'Bot' &&
+        (
+          github.event.comment.author_association == 'OWNER' ||
+          github.event.comment.author_association == 'COLLABORATOR' ||
+          github.event.comment.author_association == 'MEMBER'
+        )
+      }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch pull request context
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pull_number = context.issue.number;
+
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number,
+            });
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner,
+              repo,
+              pull_number,
+              per_page: 100,
+            });
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: pull_number,
+              per_page: 100,
+            });
+
+            const latestPlan = comments
+              .filter((comment) => comment.body && comment.body.includes("## Project Lead Agent Plan"))
+              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+
+            const reviewContext = {
+              command: context.payload.comment.body,
+              repository: context.payload.repository,
+              issueNumber: pull_number,
+              pullRequest: {
+                number: pullRequest.number,
+                title: pullRequest.title,
+                body: pullRequest.body || "",
+                user: pullRequest.user,
+                base: pullRequest.base,
+                head: pullRequest.head,
+                state: pullRequest.state,
+                draft: pullRequest.draft,
+                html_url: pullRequest.html_url,
+              },
+              files: files.map((file) => ({
+                filename: file.filename,
+                status: file.status,
+                additions: file.additions,
+                deletions: file.deletions,
+                changes: file.changes,
+                patch: file.patch || "",
+              })),
+              comments: comments.map((comment) => ({
+                user: comment.user,
+                created_at: comment.created_at,
+                body: comment.body || "",
+              })),
+              latestProjectLeadPlan: latestPlan?.body || "",
+            };
+
+            fs.writeFileSync("review-context.json", `${JSON.stringify(reviewContext, null, 2)}\n`);
+
+      - name: Select review agents
+        run: node scripts/ai/review-router.js review-context.json > review-selection.json
+
+      - name: Build review prompts
+        run: node scripts/ai/build-review-prompt.js review-context.json review-selection.json > review-prompts.json
+
+      - name: Call GitHub Models
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MODEL_ID: openai/gpt-4o
+        run: |
+          node <<'NODE'
+          const fs = require("fs");
+
+          function section(title, body) {
+            return [`### ${title}`, "", body.trim(), ""].join("\n");
+          }
+
+          async function callModel(agent) {
+            const response = await fetch("https://models.github.ai/inference/chat/completions", {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${process.env.GITHUB_TOKEN}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                model: process.env.MODEL_ID,
+                messages: agent.messages,
+                max_tokens: 500,
+                temperature: 0.2,
+              }),
+            });
+
+            if (!response.ok) {
+              const detail = await response.text();
+              throw new Error(`GitHub Models request failed with status ${response.status}: ${detail.slice(0, 300)}`);
+            }
+
+            const data = await response.json();
+            const content = data.choices?.[0]?.message?.content?.trim();
+            if (!content) {
+              throw new Error("GitHub Models returned an empty response.");
+            }
+
+            return content;
+          }
+
+          async function main() {
+            const prompts = JSON.parse(fs.readFileSync("review-prompts.json", "utf8"));
+            const selection = JSON.parse(fs.readFileSync("review-selection.json", "utf8"));
+            const lines = ["## AI PR Review", ""];
+
+            lines.push("Selected reviewers:");
+            for (const agent of selection.agents) {
+              lines.push(`- ${agent.label}: ${agent.reason}`);
+            }
+            lines.push("");
+
+            for (const agent of prompts.agents) {
+              try {
+                const content = await callModel(agent);
+                lines.push(section(agent.label, content));
+              } catch (error) {
+                console.error(`${agent.label} review failed: ${error.message}`);
+                lines.push(section(agent.label, `Review failed for this agent. Check the workflow logs for details.\n\nDecision: COMMENT_ONLY`));
+              }
+            }
+
+            fs.writeFileSync("review-comment.md", `${lines.join("\n")}\n`);
+          }
+
+          main().catch((error) => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
+
+      - name: Post review comment
+        if: always() && hashFiles('review-comment.md') != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+            const body = fs.readFileSync("review-comment.md", "utf8");
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
