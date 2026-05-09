@@ -41,3 +41,13 @@ Auto-routing always runs Project Lead and QA. Security, DevOps, and API Contract
 The review workflow posts one combined PR comment with selected reviewers, routing reasons, and each agent's review. Individual agent failures are reported in the combined comment when possible.
 
 Before calling the review agents, `/review` checks out the pull request head and runs the configured commands from `.ai/review-checks.json`. The combined review comment includes a concise `Checks` section, and the check output is capped before it is sent to the agents.
+
+Example `Checks` section:
+
+```text
+### Checks
+- Install toy-server dependencies: passed (required, exit 0)
+- Run toy-server tests: failed (required, exit 1)
+```
+
+For pull requests from forks, configured checks are marked as skipped for security; the agents still run using PR metadata, changed files, and patches.

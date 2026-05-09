@@ -3,9 +3,18 @@ const path = require("path");
 const { spawn } = require("child_process");
 
 const MAX_CHECK_OUTPUT = 6000;
+const UNSAFE_COMMAND_CHARS = /[;&|<>`$(){}[\]\n\r]/;
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8").replace(/^\uFEFF/, ""));
+}
+
+function tryReadJson(filePath) {
+  try {
+    return fs.existsSync(filePath) ? readJson(filePath) : {};
+  } catch (error) {
+    return {};
+  }
 }
 
 function writeJson(filePath, value) {
@@ -38,6 +47,65 @@ function capStreams(stdout, stderr) {
   };
 }
 
+function parseCommand(command) {
+  if (typeof command !== "string" || command.trim() === "") {
+    throw new Error("Check command must be a non-empty string.");
+  }
+
+  if (UNSAFE_COMMAND_CHARS.test(command)) {
+    throw new Error("Check command contains shell control characters that are not supported.");
+  }
+
+  const parts = command.trim().match(/"([^"]*)"|'([^']*)'|\S+/g) || [];
+  return parts.map((part) => {
+    const first = part[0];
+    const last = part[part.length - 1];
+    return (first === last && (first === '"' || first === "'")) ? part.slice(1, -1) : part;
+  });
+}
+
+function normalizeCheck(rawCheck, index) {
+  const check = rawCheck || {};
+  const name = typeof check.name === "string" && check.name.trim()
+    ? check.name.trim()
+    : `Check ${index + 1}`;
+  const workingDirectory = typeof check.workingDirectory === "string" && check.workingDirectory.trim()
+    ? check.workingDirectory.trim()
+    : ".";
+
+  if (path.isAbsolute(workingDirectory) || workingDirectory.split(/[\\/]+/).includes("..")) {
+    return {
+      valid: false,
+      check: {
+        name,
+        command: typeof check.command === "string" ? check.command : "",
+        workingDirectory,
+        required: Boolean(check.required),
+      },
+      reason: "Check skipped because workingDirectory must be a relative path inside the checkout.",
+    };
+  }
+
+  return {
+    valid: true,
+    check: {
+      name,
+      command: typeof check.command === "string" ? check.command.trim() : "",
+      workingDirectory,
+      required: Boolean(check.required),
+    },
+  };
+}
+
+function loadConfig(configPath) {
+  const config = readJson(configPath);
+  if (!Array.isArray(config)) {
+    throw new Error("Review check config must be an array.");
+  }
+
+  return config.map(normalizeCheck);
+}
+
 function runCommand(check) {
   return new Promise((resolve) => {
     const checkoutRoot = process.env.REVIEW_CHECKOUT_ROOT || ".";
@@ -55,9 +123,9 @@ function runCommand(check) {
     }
 
     try {
-      child = spawn(check.command, {
+      const [executable, ...args] = parseCommand(check.command);
+      child = spawn(executable, args, {
         cwd,
-        shell: true,
         windowsHide: true,
       });
     } catch (error) {
@@ -135,7 +203,13 @@ function skippedResult(check, reason) {
 async function runChecks(config) {
   const results = [];
 
-  for (const check of config) {
+  for (const item of config) {
+    const { check, valid, reason } = item.valid === undefined ? normalizeCheck(item, results.length) : item;
+    if (!valid) {
+      results.push(skippedResult(check, reason));
+      continue;
+    }
+
     if (!check.command) {
       results.push(skippedResult(check, "Check skipped because no command was configured."));
       continue;
@@ -152,12 +226,15 @@ async function main() {
   const outputPath = process.argv[3] || "review-check-results.json";
   const configPath = process.argv[4] || ".ai/review-checks.json";
   process.env.REVIEW_CHECKOUT_ROOT = process.argv[5] || process.env.REVIEW_CHECKOUT_ROOT || ".";
+  const skipReason = process.argv[6] || process.env.REVIEW_CHECK_SKIP_REASON || "";
 
   try {
-    const config = readJson(configPath);
-    const checks = await runChecks(Array.isArray(config) ? config : []);
+    const config = loadConfig(configPath);
+    const checks = skipReason
+      ? config.map((item) => skippedResult(item.check, skipReason))
+      : await runChecks(config);
     const payload = { checks, executionError: null };
-    const context = fs.existsSync(contextPath) ? readJson(contextPath) : {};
+    const context = tryReadJson(contextPath);
 
     context.checkResults = payload;
 
@@ -168,7 +245,7 @@ async function main() {
       checks: [],
       executionError: `Review check execution failed unexpectedly: ${error.message}`,
     };
-    const context = fs.existsSync(contextPath) ? readJson(contextPath) : {};
+    const context = tryReadJson(contextPath);
 
     context.checkResults = payload;
 
@@ -184,6 +261,9 @@ if (require.main === module) {
 module.exports = {
   MAX_CHECK_OUTPUT,
   capStreams,
+  loadConfig,
+  normalizeCheck,
+  parseCommand,
   runChecks,
   truncate,
 };

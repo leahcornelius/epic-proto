@@ -94,7 +94,17 @@ function formatCheckResults(checkResults) {
     return "(No configured checks ran.)";
   }
 
-  return truncateText(checks.map(formatCheck).join("\n\n"), MAX_TOTAL_CHECK_OUTPUT);
+  const failedRequired = checks.filter((check) => check.required && check.status === "failed");
+  const skippedRequired = checks.filter((check) => check.required && check.status === "skipped");
+  const summary = [
+    "Summary:",
+    `- Required failed: ${failedRequired.length}`,
+    `- Required skipped: ${skippedRequired.length}`,
+    "",
+    "Details:",
+  ].join("\n");
+
+  return truncateText([summary, checks.map(formatCheck).join("\n\n")].join("\n"), MAX_TOTAL_CHECK_OUTPUT);
 }
 
 function buildPromptForAgent(agent, context, selection) {

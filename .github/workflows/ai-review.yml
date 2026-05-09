@@ -113,6 +113,27 @@ jobs:
         if: ${{ steps.pr-context.outputs.has_fork_head != 'true' }}
         run: node scripts/ai/run-review-checks.js review-context.json review-check-results.json .ai/review-checks.json pr-head
 
+      - name: Record skipped review checks
+        if: ${{ steps.pr-context.outputs.has_fork_head == 'true' }}
+        run: node scripts/ai/run-review-checks.js review-context.json review-check-results.json .ai/review-checks.json . "Checks skipped because this pull request comes from a fork."
+
+      - name: Log review check results
+        run: |
+          node <<'NODE'
+          const fs = require("fs");
+          const results = JSON.parse(fs.readFileSync("review-check-results.json", "utf8"));
+
+          if (results.executionError) {
+            console.log(results.executionError);
+          }
+
+          for (const check of results.checks || []) {
+            const required = check.required ? "required" : "optional";
+            const exitCode = check.exitCode ?? "none";
+            console.log(`${check.name}: ${check.status} (${required}, exit ${exitCode})`);
+          }
+          NODE
+
       - name: Select review agents
         run: node scripts/ai/review-router.js review-context.json > review-selection.json
 
