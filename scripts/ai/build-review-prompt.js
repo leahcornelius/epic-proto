@@ -9,7 +9,32 @@ const AGENT_FILES = {
   "api-contract": ".ai/agents/review-api-contract.md",
 };
 
-const MAX_TOTAL_CHECK_OUTPUT = 12000;
+const BUDGETS = {
+  prBody: 3000,
+  projectLeadPlan: 2000,
+  diffContext: 16000,
+  checkOutput: 12000,
+  humanComment: 1000,
+  humanCommentsTotal: 4000,
+  finalPrompt: 45000,
+};
+
+const MAX_TOTAL_CHECK_OUTPUT = BUDGETS.checkOutput;
+const TRUNCATED_MARKER = "[truncated]";
+const TRUNCATED_SUFFIX = `\n${TRUNCATED_MARKER}`;
+const PROJECT_LEAD_PLAN_HEADING = "## Project Lead Agent Plan";
+const AI_PR_REVIEW_HEADING = "## AI PR Review";
+const AI_REVIEW_HEADINGS = [
+  AI_PR_REVIEW_HEADING,
+  "Project Lead PR Review",
+  "Security Agent PR Review",
+  "QA PR Review",
+  "### Project Lead",
+  "### QA",
+  "### Security",
+  "### DevOps",
+  "### API Contract",
+];
 
 function readText(relativePath) {
   return fs.readFileSync(path.join(process.cwd(), relativePath), "utf8").trim();
@@ -25,8 +50,11 @@ function truncateText(value, maxLength) {
     return text;
   }
 
-  const marker = "\n[output truncated]";
-  return `${text.slice(0, Math.max(0, maxLength - marker.length))}${marker}`;
+  if (maxLength <= TRUNCATED_SUFFIX.length) {
+    return TRUNCATED_MARKER.slice(0, maxLength);
+  }
+
+  return `${text.slice(0, maxLength - TRUNCATED_SUFFIX.length)}${TRUNCATED_SUFFIX}`;
 }
 
 function formatFile(file) {
@@ -37,24 +65,102 @@ function formatFile(file) {
     `additions: ${file.additions ?? "unknown"}`,
     `deletions: ${file.deletions ?? "unknown"}`,
   ].join(", ");
-  const patch = truncateText(file.patch || "(Patch unavailable.)", 4000);
+  const patch = file.patch || "(Patch unavailable.)";
 
   return [`### ${summary}`, "```diff", patch, "```"].join("\n");
 }
 
+function formatFiles(files) {
+  if (!files || files.length === 0) {
+    return "(No changed files provided.)";
+  }
+
+  return truncateText(files.map(formatFile).join("\n\n"), BUDGETS.diffContext);
+}
+
+function commentBody(comment) {
+  return String(comment?.body || "");
+}
+
+function commentCreatedAt(comment) {
+  const createdAt = comment?.created_at || comment?.createdAt || "";
+  const timestamp = Date.parse(createdAt);
+  return Number.isNaN(timestamp) ? null : timestamp;
+}
+
+function isBotComment(comment) {
+  const userType = comment?.user?.type || comment?.author?.type || comment?.author_type || comment?.authorType;
+  return String(userType || "").toLowerCase() === "bot";
+}
+
+function containsAnyHeading(body, headings) {
+  return headings.some((heading) => body.includes(heading));
+}
+
+function containsAiReviewHeading(comment) {
+  return containsAnyHeading(commentBody(comment), AI_REVIEW_HEADINGS);
+}
+
+function containsProjectLeadPlanHeading(comment) {
+  return commentBody(comment).includes(PROJECT_LEAD_PLAN_HEADING);
+}
+
+function latestCommentMatching(comments, predicate) {
+  return [...(comments || [])]
+    .filter(predicate)
+    .sort((a, b) => (commentCreatedAt(b) || 0) - (commentCreatedAt(a) || 0))[0];
+}
+
+function latestProjectLeadPlan(context) {
+  if (context.latestProjectLeadPlan) {
+    return context.latestProjectLeadPlan;
+  }
+
+  return commentBody(latestCommentMatching(context.comments, containsProjectLeadPlanHeading));
+}
+
+function relevantHumanComments(comments) {
+  const latestAiReview = latestCommentMatching(
+    comments,
+    (comment) => commentBody(comment).includes(AI_PR_REVIEW_HEADING)
+  );
+  const latestAiReviewAt = commentCreatedAt(latestAiReview);
+  const eligible = (comments || [])
+    .filter((comment) => !isBotComment(comment))
+    .filter((comment) => !containsAiReviewHeading(comment))
+    .filter((comment) => !containsProjectLeadPlanHeading(comment));
+  const afterLatestReview = latestAiReviewAt
+    ? eligible.filter((comment) => {
+      const createdAt = commentCreatedAt(comment);
+      return createdAt && createdAt > latestAiReviewAt;
+    })
+    : [];
+
+  return (afterLatestReview.length > 0 ? afterLatestReview : eligible)
+    .sort((a, b) => (commentCreatedAt(a) || 0) - (commentCreatedAt(b) || 0));
+}
+
 function formatComments(comments) {
-  if (!comments || comments.length === 0) {
+  const relevantComments = relevantHumanComments(comments);
+
+  if (relevantComments.length === 0) {
     return "(No PR comments provided.)";
   }
 
-  return comments
-    .slice(-20)
-    .map((comment) => {
-      const author = comment.user?.login || comment.author || "unknown";
-      const createdAt = comment.created_at || comment.createdAt || "unknown";
-      return [`### ${author} at ${createdAt}`, truncateText(comment.body || "", 1200)].join("\n");
-    })
-    .join("\n\n");
+  return truncateText(
+    relevantComments
+      .map((comment) => {
+        const author = comment.user?.login || comment.author || "unknown";
+        const createdAt = comment.created_at || comment.createdAt || "unknown";
+        return [`### ${author} at ${createdAt}`, truncateText(comment.body || "", BUDGETS.humanComment)].join("\n");
+      })
+      .join("\n\n"),
+    BUDGETS.humanCommentsTotal
+  );
+}
+
+function estimatePromptLength(messages) {
+  return messages.reduce((total, message) => total + String(message.content || "").length, 0);
 }
 
 function formatCheck(check) {
@@ -74,7 +180,7 @@ function formatCheck(check) {
   ];
 
   if (check.truncated) {
-    lines.push("", "[output truncated]");
+    lines.push("", TRUNCATED_MARKER);
   }
 
   return lines.join("\n");
@@ -104,7 +210,19 @@ function formatCheckResults(checkResults) {
     "Details:",
   ].join("\n");
 
-  return truncateText([summary, checks.map(formatCheck).join("\n\n")].join("\n"), MAX_TOTAL_CHECK_OUTPUT);
+  return truncateText([summary, checks.map(formatCheck).join("\n\n")].join("\n"), BUDGETS.checkOutput);
+}
+
+function formatReviewCheckContext(context) {
+  if (context.checkResults) {
+    return formatCheckResults(context.checkResults);
+  }
+
+  if (context.checkOutput) {
+    return truncateText(context.checkOutput, BUDGETS.checkOutput);
+  }
+
+  return "(Unavailable. Do not invent test or build results.)";
 }
 
 function buildPromptForAgent(agent, context, selection) {
@@ -119,6 +237,7 @@ function buildPromptForAgent(agent, context, selection) {
   const pr = context.pullRequest || {};
   const repository = context.repository || {};
   const files = context.files || [];
+  const planComment = latestProjectLeadPlan(context);
   const selectedReviewers = (selection.agents || [])
     .map((selectedAgent) => `${selectedAgent.label}: ${selectedAgent.reason || "No reason provided."}`)
     .join("\n");
@@ -138,43 +257,48 @@ function buildPromptForAgent(agent, context, selection) {
     selectedReviewers || "(No selected reviewers provided.)",
     "",
     "Pull request body:",
-    truncateText(pr.body || "(No pull request body provided.)", 3000),
+    truncateText(pr.body || "(No pull request body provided.)", BUDGETS.prBody),
     "",
     "Latest Project Lead plan comment:",
-    truncateText(context.latestProjectLeadPlan || "(No Project Lead plan comment found.)", 2500),
+    truncateText(planComment || "(No Project Lead plan comment found.)", BUDGETS.projectLeadPlan),
     "",
     "Changed files and patches:",
-    files.length > 0 ? files.map(formatFile).join("\n\n") : "(No changed files provided.)",
+    formatFiles(files),
     "",
     "Recent issue/PR comments:",
     formatComments(context.comments || []),
     "",
     "Check results:",
-    formatCheckResults(context.checkResults),
+    formatReviewCheckContext(context),
   ].join("\n");
+
+  const messages = [
+    {
+      role: "system",
+      content: [
+        agentPrompt,
+        "",
+        "Repository context:",
+        projectSummary,
+        "",
+        "Coding standards:",
+        codingStandards,
+      ].join("\n"),
+    },
+    {
+      role: "user",
+      content: userPrompt,
+    },
+  ];
+  const estimatedPromptLength = estimatePromptLength(messages);
 
   return {
     id: agent.id,
     label: agent.label,
     reason: agent.reason,
-    messages: [
-      {
-        role: "system",
-        content: [
-          agentPrompt,
-          "",
-          "Repository context:",
-          projectSummary,
-          "",
-          "Coding standards:",
-          codingStandards,
-        ].join("\n"),
-      },
-      {
-        role: "user",
-        content: userPrompt,
-      },
-    ],
+    messages,
+    estimatedPromptLength,
+    exceededLocalContextBudget: estimatedPromptLength > BUDGETS.finalPrompt,
     selection,
   };
 }
@@ -203,9 +327,15 @@ if (require.main === module) {
 }
 
 module.exports = {
+  AI_REVIEW_HEADINGS,
+  BUDGETS,
   MAX_TOTAL_CHECK_OUTPUT,
   buildReviewPrompts,
   buildPromptForAgent,
+  containsAiReviewHeading,
   formatCheckResults,
+  formatComments,
+  formatFiles,
+  relevantHumanComments,
   truncateText,
 };

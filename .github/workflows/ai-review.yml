@@ -147,12 +147,24 @@ jobs:
         run: |
           node <<'NODE'
           const fs = require("fs");
+          const FINAL_PROMPT_BUDGET = 45000;
 
           function section(title, body) {
             return [`### ${title}`, "", body.trim(), ""].join("\n");
           }
 
           async function callModel(agent) {
+            const promptLength = agent.estimatedPromptLength ?? agent.messages.reduce(
+              (total, message) => total + String(message.content || "").length,
+              0
+            );
+            console.log(`${agent.label} approximate prompt length: ${promptLength} characters`);
+
+            if (agent.exceededLocalContextBudget || promptLength > FINAL_PROMPT_BUDGET) {
+              agent.exceededLocalContextBudget = true;
+              throw new Error(`Prompt exceeded local context budget (${promptLength} > ${FINAL_PROMPT_BUDGET} characters).`);
+            }
+
             const response = await fetch("https://models.github.ai/inference/chat/completions", {
               method: "POST",
               headers: {
@@ -234,7 +246,10 @@ jobs:
                 lines.push(section(agent.label, content));
               } catch (error) {
                 console.error(`${agent.label} review failed: ${error.message}`);
-                lines.push(section(agent.label, `Review failed for this agent. Check the workflow logs for details.\n\nDecision: COMMENT_ONLY`));
+                const failureNote = agent.exceededLocalContextBudget
+                  ? "Review skipped for this agent because the prompt exceeded the local context budget after truncation. Check the workflow logs for the approximate prompt length."
+                  : "Review failed for this agent. Check the workflow logs for details.";
+                lines.push(section(agent.label, `${failureNote}\n\nDecision: COMMENT_ONLY`));
               }
             }
 
