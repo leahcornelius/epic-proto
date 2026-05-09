@@ -1,0 +1,113 @@
+name: AI Plan
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  models: read
+
+jobs:
+  plan:
+    name: Generate Project Lead plan
+    runs-on: ubuntu-latest
+    if: >-
+      ${{
+        startsWith(github.event.comment.body, '/plan') &&
+        !github.event.issue.pull_request &&
+        github.event.comment.user.type != 'Bot'
+      }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build prompt
+        run: node scripts/ai/build-plan-prompt.js > plan-prompt.json
+
+      - name: Call GitHub Models
+        id: model
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MODEL_ID: openai/gpt-4o
+        run: |
+          node <<'NODE'
+          const fs = require("fs");
+
+          async function main() {
+            const prompt = JSON.parse(fs.readFileSync("plan-prompt.json", "utf8"));
+            const response = await fetch("https://models.github.ai/inference/chat/completions", {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${process.env.GITHUB_TOKEN}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                model: process.env.MODEL_ID,
+                messages: prompt.messages,
+                max_tokens: 500,
+                temperature: 0.2,
+              }),
+            });
+
+            if (!response.ok) {
+              const detail = await response.text();
+              console.error(`GitHub Models request failed with status ${response.status}`);
+              console.error(detail.slice(0, 500));
+              fs.writeFileSync("plan-comment.md", [
+                "## Project Lead Agent Plan",
+                "",
+                "Plan generation failed while calling GitHub Models. Please check the workflow logs.",
+                "",
+              ].join("\n"));
+              process.exit(1);
+            }
+
+            const data = await response.json();
+            const content = data.choices?.[0]?.message?.content?.trim();
+            if (!content) {
+              console.error("GitHub Models response did not include message content.");
+              fs.writeFileSync("plan-comment.md", [
+                "## Project Lead Agent Plan",
+                "",
+                "Plan generation failed because GitHub Models returned an empty response.",
+                "",
+              ].join("\n"));
+              process.exit(1);
+            }
+
+            fs.writeFileSync("plan-comment.md", `## Project Lead Agent Plan\n\n${content}\n`);
+          }
+
+          main().catch((error) => {
+            console.error(error.message);
+            fs.writeFileSync("plan-comment.md", [
+              "## Project Lead Agent Plan",
+              "",
+              "Plan generation failed unexpectedly. Please check the workflow logs.",
+              "",
+            ].join("\n"));
+            process.exit(1);
+          });
+          NODE
+
+      - name: Post plan comment
+        if: always() && hashFiles('plan-comment.md') != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+            const body = fs.readFileSync("plan-comment.md", "utf8");
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Fail workflow when planning failed
+        if: failure()
+        run: exit 1
