@@ -99,8 +99,10 @@ jobs:
             fs.writeFileSync("review-context.json", `${JSON.stringify(reviewContext, null, 2)}\n`);
             core.setOutput("head_sha", pullRequest.head.sha);
             core.setOutput("head_repo", pullRequest.head.repo.full_name);
+            core.setOutput("has_fork_head", pullRequest.head.repo.fork ? "true" : "false");
 
       - name: Checkout pull request head
+        if: ${{ steps.pr-context.outputs.has_fork_head != 'true' }}
         uses: actions/checkout@v4
         with:
           repository: ${{ steps.pr-context.outputs.head_repo }}
@@ -108,6 +110,7 @@ jobs:
           path: pr-head
 
       - name: Run review checks
+        if: ${{ steps.pr-context.outputs.has_fork_head != 'true' }}
         run: node scripts/ai/run-review-checks.js review-context.json review-check-results.json .ai/review-checks.json pr-head
 
       - name: Select review agents
