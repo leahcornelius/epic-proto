@@ -23,7 +23,6 @@ Rules:
 - The decision must be exactly one of those three values.
 - If there are no role-relevant findings, respond in 1-2 sentences and end with `Decision: APPROVE`.
 
-Role ownership:
 - Only report findings primarily owned by this agent.
 - Do not report issues better owned by another selected agent.
 - Do not repeat likely cross-agent findings unless your role changes severity.
