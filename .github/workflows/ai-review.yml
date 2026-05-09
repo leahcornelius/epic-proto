@@ -6,10 +6,8 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
+  pull-requests: read
   issues: write
-  checks: read
-  statuses: read
   models: read
 
 jobs:
@@ -29,10 +27,16 @@ jobs:
       }}
 
     steps:
-      - name: Checkout
+      - name: Checkout workflow files
         uses: actions/checkout@v4
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       - name: Fetch pull request context
+        id: pr-context
         uses: actions/github-script@v7
         with:
           script: |
@@ -62,36 +66,9 @@ jobs:
               per_page: 100,
             });
 
-            const checkRuns = await github.paginate(github.rest.checks.listForRef, {
-              owner,
-              repo,
-              ref: pullRequest.head.sha,
-              per_page: 100,
-            });
-
-            const { data: combinedStatus } = await github.rest.repos.getCombinedStatusForRef({
-              owner,
-              repo,
-              ref: pullRequest.head.sha,
-            });
-
             const latestPlan = comments
               .filter((comment) => comment.body && comment.body.includes("## Project Lead Agent Plan"))
               .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-
-            const checkOutput = [
-              "Check runs:",
-              ...checkRuns.map((check) => [
-                `- ${check.name}: ${check.status}${check.conclusion ? ` / ${check.conclusion}` : ""}`,
-                check.output?.title ? `  title: ${check.output.title}` : "",
-                check.output?.summary ? `  summary: ${check.output.summary.slice(0, 1000)}` : "",
-              ].filter(Boolean).join("\n")),
-              "",
-              "Commit statuses:",
-              ...combinedStatus.statuses.map((status) => (
-                `- ${status.context}: ${status.state}${status.description ? ` (${status.description})` : ""}`
-              )),
-            ].join("\n");
 
             const reviewContext = {
               command: context.payload.comment.body,
@@ -122,10 +99,45 @@ jobs:
                 body: comment.body || "",
               })),
               latestProjectLeadPlan: latestPlan?.body || "",
-              checkOutput,
             };
 
             fs.writeFileSync("review-context.json", `${JSON.stringify(reviewContext, null, 2)}\n`);
+            core.setOutput("head_sha", pullRequest.head.sha);
+            core.setOutput("head_repo", pullRequest.head.repo.full_name);
+            core.setOutput("has_fork_head", pullRequest.head.repo.full_name !== pullRequest.base.repo.full_name ? "true" : "false");
+
+      - name: Checkout pull request head
+        if: ${{ steps.pr-context.outputs.has_fork_head != 'true' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.pr-context.outputs.head_repo }}
+          ref: ${{ steps.pr-context.outputs.head_sha }}
+          path: pr-head
+
+      - name: Run review checks
+        if: ${{ steps.pr-context.outputs.has_fork_head != 'true' }}
+        run: node scripts/ai/run-review-checks.js review-context.json review-check-results.json .ai/review-checks.json pr-head
+
+      - name: Record skipped review checks
+        if: ${{ steps.pr-context.outputs.has_fork_head == 'true' }}
+        run: node scripts/ai/run-review-checks.js review-context.json review-check-results.json .ai/review-checks.json . "Checks skipped because this pull request comes from a fork."
+
+      - name: Log review check results
+        run: |
+          node <<'NODE'
+          const fs = require("fs");
+          const results = JSON.parse(fs.readFileSync("review-check-results.json", "utf8"));
+
+          if (results.executionError) {
+            console.log(results.executionError);
+          }
+
+          for (const check of results.checks || []) {
+            const required = check.required ? "required" : "optional";
+            const exitCode = check.exitCode ?? "none";
+            console.log(`${check.name}: ${check.status} (${required}, exit ${exitCode})`);
+          }
+          NODE
 
       - name: Select review agents
         run: node scripts/ai/review-router.js review-context.json > review-selection.json
@@ -211,6 +223,41 @@ jobs:
             const lines = ["## AI PR Review", ""];
             const specialistSections = [];
             const specialistReviews = [];
+
+            lines.push("### Checks");
+            const checkResults = reviewContext.checkResults;
+            if (!checkResults) {
+              lines.push("Check results were unavailable.");
+            } else if (checkResults.executionError) {
+              lines.push(checkResults.executionError);
+            } else if (!checkResults.checks || checkResults.checks.length === 0) {
+              lines.push("No configured checks ran.");
+            } else {
+              const requiredFailed = checkResults.checks.filter((check) => check.required && check.status === "failed").length;
+              const requiredSkipped = checkResults.checks.filter((check) => check.required && check.status === "skipped").length;
+              lines.push(`Required failed: ${requiredFailed}`);
+              lines.push(`Required skipped: ${requiredSkipped}`);
+              lines.push("");
+
+              for (const check of checkResults.checks) {
+                const required = check.required ? "required" : "optional";
+                const exitCode = check.exitCode ?? "none";
+                lines.push(`- ${check.name}: ${check.status} (${required}, exit ${exitCode})`);
+                if (check.status !== "passed") {
+                  const output = [check.stdout, check.stderr].filter(Boolean).join("\n").trim();
+                  if (output) {
+                    lines.push("");
+                    lines.push("```");
+                    lines.push(output.slice(0, 1200));
+                    if (output.length > 1200) {
+                      lines.push("[output truncated]");
+                    }
+                    lines.push("```");
+                  }
+                }
+              }
+            }
+            lines.push("");
 
             lines.push("Selected specialist reviewers:");
             for (const agent of selection.agents) {

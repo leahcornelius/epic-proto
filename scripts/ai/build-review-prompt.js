@@ -19,6 +19,7 @@ const BUDGETS = {
   finalPrompt: 45000,
 };
 
+const MAX_TOTAL_CHECK_OUTPUT = BUDGETS.checkOutput;
 const TRUNCATED_MARKER = "[truncated]";
 const TRUNCATED_SUFFIX = `\n${TRUNCATED_MARKER}`;
 const PROJECT_LEAD_PLAN_HEADING = "## Project Lead Agent Plan";
@@ -174,6 +175,68 @@ function selectedReviewersText(selection) {
   return [...selectedSpecialists, ...coordinator].join("\n");
 }
 
+function formatCheck(check) {
+  const lines = [
+    `### ${check.name || "(unnamed check)"}`,
+    `Command: ${check.command || "(not configured)"}`,
+    `Working directory: ${check.workingDirectory || "."}`,
+    `Required: ${check.required ? "yes" : "no"}`,
+    `Status: ${check.status || "unknown"}`,
+    `Exit code: ${check.exitCode ?? "none"}`,
+    "",
+    "stdout:",
+    check.stdout || "(empty)",
+    "",
+    "stderr:",
+    check.stderr || "(empty)",
+  ];
+
+  if (check.truncated) {
+    lines.push("", TRUNCATED_MARKER);
+  }
+
+  return lines.join("\n");
+}
+
+function formatCheckResults(checkResults) {
+  if (!checkResults) {
+    return "(Unavailable. Do not invent test or build results.)";
+  }
+
+  if (checkResults.executionError) {
+    return checkResults.executionError;
+  }
+
+  const checks = checkResults.checks || [];
+  if (checks.length === 0) {
+    return "(No configured checks ran.)";
+  }
+
+  const failedRequired = checks.filter((check) => check.required && check.status === "failed");
+  const skippedRequired = checks.filter((check) => check.required && check.status === "skipped");
+  const summary = [
+    "Summary:",
+    `- Required failed: ${failedRequired.length}`,
+    `- Required skipped: ${skippedRequired.length}`,
+    "",
+    "Details:",
+  ].join("\n");
+
+  return truncateText([summary, checks.map(formatCheck).join("\n\n")].join("\n"), BUDGETS.checkOutput);
+}
+
+function formatReviewCheckContext(context) {
+  if (context.checkResults) {
+    return formatCheckResults(context.checkResults);
+  }
+
+  if (context.checkOutput) {
+    return truncateText(context.checkOutput, BUDGETS.checkOutput);
+  }
+
+  return "(Unavailable. Do not invent test or build results.)";
+}
+
 function formatSpecialistReviews(reviews) {
   if (!reviews || reviews.length === 0) {
     return "(No specialist review outputs were provided.)";
@@ -255,10 +318,8 @@ function buildPromptForAgent(agent, context, selection) {
     "Recent issue/PR comments:",
     formatComments(context.comments || []),
     "",
-    "Test/build output:",
-    context.checkOutput
-      ? truncateText(context.checkOutput, BUDGETS.checkOutput)
-      : "(Unavailable. Do not invent test or build results.)",
+    "Check results:",
+    formatReviewCheckContext(context),
   ].join("\n");
 
   const messages = [
@@ -333,10 +394,8 @@ function buildPromptForCoordinator(coordinator, context, selection) {
     "Recent issue/PR comments:",
     formatComments(context.comments || []),
     "",
-    "Test/build output:",
-    context.checkOutput
-      ? truncateText(context.checkOutput, BUDGETS.checkOutput)
-      : "(Unavailable. Do not invent test or build results.)",
+    "Check results:",
+    formatReviewCheckContext(context),
   ];
   const rawUserPrompt = userPromptSections.join("\n");
   const systemPrompt = [
@@ -403,11 +462,13 @@ if (require.main === module) {
 module.exports = {
   AI_REVIEW_HEADINGS,
   BUDGETS,
+  MAX_TOTAL_CHECK_OUTPUT,
   buildReviewPrompts,
   buildPromptForAgent,
   buildPromptForCoordinator,
   containsAiReviewHeading,
   formatSpecialistReviews,
+  formatCheckResults,
   formatComments,
   formatFiles,
   relevantHumanComments,
