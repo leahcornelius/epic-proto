@@ -62,7 +62,7 @@ Example check config:
 ]
 ```
 
-The combined review comment includes a concise `Checks` section, and the check output is capped before it is sent to the agents.
+The combined review comment includes a concise `Checks` section, and the check output is capped before it is sent to the agents. Failed required review checks are reported in the `/review` comment so reviewers can act on them, but they do not fail the `/review` workflow by themselves.
 
 Example `Checks` section:
 
