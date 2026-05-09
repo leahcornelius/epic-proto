@@ -304,7 +304,7 @@ function buildPromptForCoordinator(coordinator, context, selection) {
     selectedReviewers,
   } = basePromptContext(coordinator, context, selection);
 
-  const userPrompt = [
+  const userPromptSections = [
     `Coordinate this pull request review as ${coordinator.label}.`,
     "",
     `Repository: ${repository.full_name || context.repositoryFullName || process.env.GITHUB_REPOSITORY || "unknown"}`,
@@ -337,20 +337,24 @@ function buildPromptForCoordinator(coordinator, context, selection) {
     context.checkOutput
       ? truncateText(context.checkOutput, BUDGETS.checkOutput)
       : "(Unavailable. Do not invent test or build results.)",
+  ];
+  const rawUserPrompt = userPromptSections.join("\n");
+  const systemPrompt = [
+    agentPrompt,
+    "",
+    "Repository context:",
+    projectSummary,
+    "",
+    "Coding standards:",
+    codingStandards,
   ].join("\n");
+  const coordinatorUserBudget = Math.max(BUDGETS.finalPrompt - systemPrompt.length, 0);
+  const userPrompt = truncateText(rawUserPrompt, coordinatorUserBudget);
 
   const messages = [
     {
       role: "system",
-      content: [
-        agentPrompt,
-        "",
-        "Repository context:",
-        projectSummary,
-        "",
-        "Coding standards:",
-        codingStandards,
-      ].join("\n"),
+      content: systemPrompt,
     },
     {
       role: "user",
