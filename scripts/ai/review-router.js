@@ -2,15 +2,19 @@ const fs = require("fs");
 const path = require("path");
 
 const AGENTS = {
-  lead: { label: "Project Lead", aliases: ["lead"] },
   qa: { label: "QA", aliases: ["qa"] },
   security: { label: "Security", aliases: ["security"] },
   devops: { label: "DevOps", aliases: ["devops"] },
   "api-contract": { label: "API Contract", aliases: ["api-contract", "api"] },
 };
 
+const COORDINATOR = { id: "lead", label: "Project Lead Coordinator", aliases: ["lead"] };
+
 const EXPLICIT_SELECTORS = new Map(
-  Object.entries(AGENTS).flatMap(([id, agent]) => agent.aliases.map((alias) => [alias, id]))
+  [
+    ...Object.entries(AGENTS).flatMap(([id, agent]) => agent.aliases.map((alias) => [alias, id])),
+    ...COORDINATOR.aliases.map((alias) => [alias, COORDINATOR.id]),
+  ]
 );
 
 function readJson(relativePath) {
@@ -107,6 +111,10 @@ function addSelection(selections, id, reason) {
   }
 }
 
+function coordinatorSelection(reason) {
+  return { id: COORDINATOR.id, label: COORDINATOR.label, reason };
+}
+
 function routeReview(context, routingConfig) {
   const command = parseReviewCommand(context.command || context.comment?.body || "");
   if (!command.valid) {
@@ -120,7 +128,11 @@ function routeReview(context, routingConfig) {
     for (const id of Object.keys(AGENTS)) {
       addSelection(selections, id, "Explicitly selected by /review all.");
     }
-    return { selector, agents: selections };
+    return {
+      selector,
+      agents: selections,
+      coordinator: coordinatorSelection("Project Lead Coordinator runs after /review all specialist reviews."),
+    };
   }
 
   if (selector !== "auto") {
@@ -129,11 +141,21 @@ function routeReview(context, routingConfig) {
       throw new Error(`Unsupported /review selector: ${selector}`);
     }
 
-    addSelection(selections, selectedAgent, `Explicitly selected by /review ${selector}.`);
-    return { selector, agents: selections };
+    if (selectedAgent !== COORDINATOR.id) {
+      addSelection(selections, selectedAgent, `Explicitly selected by /review ${selector}.`);
+    }
+
+    return {
+      selector,
+      agents: selections,
+      coordinator: coordinatorSelection(
+        selectedAgent === COORDINATOR.id
+          ? "Explicitly selected by /review lead."
+          : `Project Lead Coordinator runs after /review ${selector}.`
+      ),
+    };
   }
 
-  addSelection(selections, "lead", "Project Lead always runs for auto-routing.");
   addSelection(selections, "qa", "QA always runs for auto-routing.");
 
   const files = changedFileNames(context);
@@ -153,7 +175,11 @@ function routeReview(context, routingConfig) {
     }
   }
 
-  return { selector, agents: selections };
+  return {
+    selector,
+    agents: selections,
+    coordinator: coordinatorSelection("Project Lead Coordinator runs after auto-routed specialist reviews."),
+  };
 }
 
 function main() {
@@ -173,6 +199,7 @@ if (require.main === module) {
 
 module.exports = {
   AGENTS,
+  COORDINATOR,
   parseReviewCommand,
   routeReview,
   globToRegExp,

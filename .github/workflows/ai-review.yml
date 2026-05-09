@@ -153,6 +153,9 @@ jobs:
           node <<'NODE'
           const fs = require("fs");
           const {
+            buildPromptForCoordinator,
+          } = require("./scripts/ai/build-review-prompt");
+          const {
             ReviewFailure,
             createModelRequestFailure,
             formatReviewFailure,
@@ -218,6 +221,8 @@ jobs:
             const reviewContext = JSON.parse(fs.readFileSync("review-context.json", "utf8"));
             const logsUrl = workflowRunUrl();
             const lines = ["## AI PR Review", ""];
+            const specialistSections = [];
+            const specialistReviews = [];
 
             lines.push("### Checks");
             const checkResults = reviewContext.checkResults;
@@ -254,22 +259,49 @@ jobs:
             }
             lines.push("");
 
-            lines.push("Selected reviewers:");
+            lines.push("Selected specialist reviewers:");
             for (const agent of selection.agents) {
               lines.push(`- ${agent.label}: ${agent.reason}`);
+            }
+            if (selection.agents.length === 0) {
+              lines.push("- None.");
+            }
+            if (selection.coordinator) {
+              lines.push("");
+              lines.push(`Coordinator: ${selection.coordinator.label}: ${selection.coordinator.reason}`);
             }
             lines.push("");
 
             for (const agent of prompts.agents) {
               try {
                 const content = await callModel(agent);
-                lines.push(section(agent.label, content));
+                specialistReviews.push({ id: agent.id, label: agent.label, content });
+                specialistSections.push(section(agent.label, content));
               } catch (error) {
                 console.error(`${agent.label} review failed: ${error.message}`);
-                lines.push(section(agent.label, formatReviewFailure(error, { logsUrl })));
+                const content = formatReviewFailure(error, { logsUrl });
+                specialistReviews.push({ id: agent.id, label: agent.label, content, error: true });
+                specialistSections.push(section(agent.label, content));
               }
             }
 
+            if (selection.coordinator) {
+              const coordinatorPrompt = buildPromptForCoordinator(
+                selection.coordinator,
+                { ...reviewContext, specialistReviews },
+                selection
+              );
+
+              try {
+                const content = await callModel(coordinatorPrompt);
+                lines.push(section(selection.coordinator.label, content));
+              } catch (error) {
+                console.error(`${selection.coordinator.label} review failed: ${error.message}`);
+                lines.push(section(selection.coordinator.label, formatReviewFailure(error, { logsUrl })));
+              }
+            }
+
+            lines.push(...specialistSections);
             fs.writeFileSync("review-comment.md", `${lines.join("\n")}\n`);
           }
 

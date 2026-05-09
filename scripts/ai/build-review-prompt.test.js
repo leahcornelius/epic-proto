@@ -2,10 +2,12 @@ const assert = require("assert");
 
 const {
   BUDGETS,
-  MAX_TOTAL_CHECK_OUTPUT,
+  buildPromptForCoordinator,
   buildPromptForAgent,
+  MAX_TOTAL_CHECK_OUTPUT,
   buildReviewPrompts,
   formatCheckResults,
+  formatSpecialistReviews,
   formatComments,
   formatFiles,
   relevantHumanComments,
@@ -32,6 +34,11 @@ function baseSelection(agent) {
   return {
     selector: "lead",
     agents: [agent],
+    coordinator: {
+      id: "lead",
+      label: "Project Lead Coordinator",
+      reason: "Explicitly selected by /review lead.",
+    },
   };
 }
 
@@ -212,6 +219,30 @@ function run() {
   );
   assert(oversizedPrompt.estimatedPromptLength > BUDGETS.finalPrompt);
   assert.strictEqual(oversizedPrompt.exceededLocalContextBudget, true);
+
+  const specialistReviews = formatSpecialistReviews([
+    { id: "qa", label: "QA", content: "Decision: REQUEST_CHANGES\nFindings:\n- Missing assertion." },
+  ]);
+  assert(specialistReviews.includes("### QA"));
+  assert(specialistReviews.includes("Missing assertion."));
+
+  const coordinatorPrompt = buildPromptForCoordinator(
+    {
+      id: "lead",
+      label: "Project Lead Coordinator",
+      reason: "Explicitly selected by /review lead.",
+    },
+    baseContext({
+      specialistReviews: [
+        { id: "qa", label: "QA", content: "Decision: COMMENT_ONLY\nFindings:\n- Optional polish." },
+      ],
+    }),
+    baseSelection(baseAgent())
+  );
+  const coordinatorPromptText = userPrompt(coordinatorPrompt);
+  assert(coordinatorPromptText.includes("Coordinate this pull request review as Project Lead Coordinator."));
+  assert(coordinatorPromptText.includes("Specialist review outputs:"));
+  assert(coordinatorPromptText.includes("Optional polish."));
 
   console.log("build-review-prompt tests passed");
 }
