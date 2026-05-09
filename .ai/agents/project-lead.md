@@ -15,3 +15,4 @@ Rules:
 - Include a branch suggestion. If the issue mentions a branch, use it. Otherwise suggest a sensible branch name using `feat/`, `fix/`, or `chore/`.
 - Prefer practical next steps over broad architecture.
 - Do not propose `/review`, `/begin`, backend services, or direct OpenAI or Anthropic API key use unless the issue explicitly asks for them.
+- Do not include a top-level heading. The workflow will add "## Project Lead Agent Plan".

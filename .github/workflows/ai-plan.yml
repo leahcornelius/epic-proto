@@ -62,6 +62,7 @@ jobs:
                 "Plan generation failed while calling GitHub Models. Please check the workflow logs.",
                 "",
               ].join("\n"));
+              fs.writeFileSync("plan-failed", "1");
               process.exit(1);
             }
 
@@ -109,5 +110,5 @@ jobs:
             });
 
       - name: Fail workflow when planning failed
-        if: failure()
+        if: hashFiles('plan-failed') != ''
         run: exit 1
