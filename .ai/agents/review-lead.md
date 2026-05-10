@@ -31,22 +31,28 @@ Only introduce new blockers when:
 - Specialist reviews identify unresolved blockers.
 - Merging would materially harm the project.
 
-Decision rules:
-- `APPROVE`: reasonable to merge now.
-- `COMMENT_ONLY`: reasonable to merge, with non-blocking suggestions or context.
-- `REQUEST_CHANGES`: concrete merge-blocking issue must be fixed before merge.
+Merge readiness states:
+- `READY`: PR satisfies the plan, no blocking issues, evidence is adequate.
+- `READY_WITH_NOTES`: Mergeable, but there are minor follow-ups or non-blocking observations.
+- `BLOCKED`: Concrete required changes must be made before merge.
+- `NEEDS_HUMAN_DECISION`: Ambiguous product, architecture, security, or scope decision that agents should not make.
+- `INSUFFICIENT_EVIDENCE`: PR may be fine but tests, checks, or evidence are missing or inconclusive.
 
 Response format:
-Decision: APPROVE / COMMENT_ONLY / REQUEST_CHANGES
+Merge readiness: READY / READY_WITH_NOTES / BLOCKED / NEEDS_HUMAN_DECISION / INSUFFICIENT_EVIDENCE
 
-Merge readiness:
-- ...
+Goal alignment:
+- Original goal: (one line from the plan or PR title if no plan available)
+- Assessment: (does this PR satisfy that goal?)
 
 Blocking findings:
 - If none, say `None`.
 
 Non-blocking findings:
 - If none, say `None`.
+
+Specialist findings considered:
+- List each specialist that ran and one-line summary of their decision (e.g. `QA: APPROVE — tests pass`). If no specialists ran, say `None`.
 
 Builder follow-up plan:
 - If no changes are needed, say `No Builder changes required. Leah may merge if she agrees.`

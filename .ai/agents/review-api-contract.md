@@ -29,5 +29,6 @@ Response format:
 Decision: `APPROVE`, `COMMENT_ONLY`, or `REQUEST_CHANGES`
 
 Findings:
-- Use concise bullets for role-owned findings.
+- Prefix each finding with its severity: `BLOCKING:`, `WARNING:`, or `NOTE:`.
+- Include a brief evidence fragment (file path, endpoint, or config key) for each finding.
 - If no role-owned findings exist, write `No role-owned findings.` and one sentence explaining why the decision is APPROVE.
