@@ -1,4 +1,6 @@
 .vscode/**
+.mcp.json
+.claude
 **/node_modules/**
 *.log
 *.env
